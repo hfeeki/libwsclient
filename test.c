@@ -26,13 +26,13 @@ int onmessage(wsclient *c, wsclient_message *msg) {
 
 int onopen(wsclient *c) {
 	fprintf(stderr, "onopen called: %d\n", c->sockfd);
-	libwsclient_send(c, "Hello onopen");
+	libwsclient_send_binary(c, strlen("Hello onopen xxx"), "Hello onopen xxx");
 	return 0;
 }
 
 int main(int argc, char **argv) {
 	//Initialize new wsclient * using specified URI
-	wsclient *client = libwsclient_new("ws://echo.websocket.org");
+	wsclient *client = libwsclient_new("ws://localhost:5555/usr/2234345/login");
 	if(!client) {
 		fprintf(stderr, "Unable to initialize new WS client.\n");
 		exit(1);

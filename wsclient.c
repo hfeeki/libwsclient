@@ -937,6 +937,126 @@ int libwsclient_send_fragment(wsclient *client, char *strdata, int len, int flag
 	return sent;
 }
 
+int libwsclient_send_binary(wsclient *client, char *strdata, int len)  {
+	wsclient_error *err = NULL;
+	struct timeval tv;
+	unsigned char mask[4];
+	unsigned int mask_int;
+	unsigned long long payload_len;
+	unsigned char finNopcode;
+	unsigned int payload_len_small;
+	unsigned int payload_offset = 6;
+	unsigned int len_size;
+	unsigned long long be_payload_len;
+	unsigned int sent = 0;
+	int i, sockfd;
+	unsigned int frame_size;
+	char *data = NULL;
+
+	sockfd = client->sockfd;
+
+	if(client->flags & CLIENT_SENT_CLOSE_FRAME) {
+		if(client->onerror) {
+			err = libwsclient_new_error(WS_SEND_AFTER_CLOSE_FRAME_ERR);
+			client->onerror(client, err);
+			free(err);
+			err = NULL;
+		}
+		return 0;
+	}
+	if(client->flags & CLIENT_CONNECTING) {
+		if(client->onerror) {
+			err = libwsclient_new_error(WS_SEND_DURING_CONNECT_ERR);
+			client->onerror(client, err);
+			free(err);
+			err = NULL;
+		}
+		return 0;
+	}
+	if(strdata == NULL) {
+		if(client->onerror) {
+			err = libwsclient_new_error(WS_SEND_NULL_DATA_ERR);
+			client->onerror(client, err);
+			free(err);
+			err = NULL;
+		}
+		return 0;
+	}
+
+	gettimeofday(&tv, NULL);
+	srand(tv.tv_usec * tv.tv_sec);
+	mask_int = rand();
+	memcpy(mask, &mask_int, 4);
+	payload_len = len;
+	finNopcode = 0x82; //FIN and binary opcode.
+	if(payload_len <= 125) {
+		frame_size = 6 + payload_len;
+		payload_len_small = payload_len;
+
+	} else if(payload_len > 125 && payload_len <= 0xffff) {
+		frame_size = 8 + payload_len;
+		payload_len_small = 126;
+		payload_offset += 2;
+	} else if(payload_len > 0xffff && payload_len <= 0xffffffffffffffffLL) {
+		frame_size = 14 + payload_len;
+		payload_len_small = 127;
+		payload_offset += 8;
+	} else {
+		if(client->onerror) {
+			err = libwsclient_new_error(WS_SEND_DATA_TOO_LARGE_ERR);
+			client->onerror(client, err);
+			free(err);
+			err = NULL;
+		}
+		return -1;
+	}
+	data = (char *)malloc(frame_size);
+	memset(data, 0, frame_size);
+	*data = finNopcode;
+	*(data+1) = payload_len_small | 0x80; //payload length with mask bit on
+	if(payload_len_small == 126) {
+		payload_len &= 0xffff;
+		len_size = 2;
+		for(i = 0; i < len_size; i++) {
+			*(data+2+i) = *((char *)&payload_len+(len_size-i-1));
+		}
+	}
+	if(payload_len_small == 127) {
+		payload_len &= 0xffffffffffffffffLL;
+		len_size = 8;
+		for(i = 0; i < len_size; i++) {
+			*(data+2+i) = *((char *)&payload_len+(len_size-i-1));
+		}
+	}
+	for(i=0;i<4;i++)
+		*(data+(payload_offset-4)+i) = mask[i];
+
+	memcpy(data+payload_offset, strdata, strlen(strdata));
+	for(i=0;i<strlen(strdata);i++)
+		*(data+payload_offset+i) ^= mask[i % 4] & 0xff;
+	sent = 0;
+	i = 0;
+
+	pthread_mutex_lock(&client->send_lock);
+	while(sent < frame_size && i >= 0) {
+		i = _libwsclient_write(client, data+sent, frame_size - sent);
+		sent += i;
+	}
+	pthread_mutex_unlock(&client->send_lock);
+
+	if(i < 0) {
+		if(client->onerror) {
+			err = libwsclient_new_error(WS_SEND_SEND_ERR);
+			client->onerror(client, err);
+			free(err);
+			err = NULL;
+		}
+	}
+
+	free(data);
+	return sent;
+}
+
 int libwsclient_send(wsclient *client, char *strdata)  {
 	wsclient_error *err = NULL;
 	struct timeval tv;
